@@ -39,7 +39,7 @@ public class MovementInput : MonoBehaviour {
     private Vector3 horizontalMove;
     private float currentMoveSpeedMultiplier = 0.5f;
     private float rotationVelocity;
-    private ThirdPersonCameraAAA aaaCamera;
+    private ThirdPersonCamera thirdPersonCamera;
 
 	// Use this for initialization
 	void Start () {
@@ -48,24 +48,24 @@ public class MovementInput : MonoBehaviour {
 		cam = Camera.main;
 		controller = this.GetComponent<CharacterController> ();
 
-        SetupAAACamera();
+        SetupCamera();
 	}
 
-    void SetupAAACamera()
+    void SetupCamera()
     {
         if (cam == null) cam = Camera.main;
         if (cam == null) return;
 
-        // Otomatis pasang dan aktifkan ThirdPersonCameraAAA di Main Camera
-        aaaCamera = cam.GetComponent<ThirdPersonCameraAAA>();
-        if (aaaCamera == null)
+        // Otomatis pasang dan aktifkan ThirdPersonCamera di Main Camera
+        thirdPersonCamera = cam.GetComponent<ThirdPersonCamera>();
+        if (thirdPersonCamera == null)
         {
-            aaaCamera = cam.gameObject.AddComponent<ThirdPersonCameraAAA>();
+            thirdPersonCamera = cam.gameObject.AddComponent<ThirdPersonCamera>();
         }
-        aaaCamera.target = this.transform;
-        aaaCamera.DisableConflictingCinemachine();
+        thirdPersonCamera.target = this.transform;
+        thirdPersonCamera.DisableConflictingCinemachine();
 
-        // Otomatis pasang StarSparrowControllerAAA & Lighting Rig pada prefab StarSparrow21 di scene
+        // Otomatis pasang SpaceshipController & Lighting Rig pada pesawat di scene
         GameObject shipObj = GameObject.Find("StarSparrow21");
         if (shipObj == null)
         {
@@ -73,7 +73,7 @@ public class MovementInput : MonoBehaviour {
             Transform[] allTransforms = FindObjectsByType<Transform>(FindObjectsSortMode.None);
             for (int i = 0; i < allTransforms.Length; i++)
             {
-                if (allTransforms[i] != null && allTransforms[i].parent == null && allTransforms[i].name.StartsWith("StarSparrow"))
+                if (allTransforms[i] != null && allTransforms[i].parent == null && (allTransforms[i].name.StartsWith("StarSparrow21") || allTransforms[i].name.StartsWith("SpaceshipPlayer")))
                 {
                     shipObj = allTransforms[i].gameObject;
                     break;
@@ -83,15 +83,20 @@ public class MovementInput : MonoBehaviour {
 
         if (shipObj != null)
         {
-            StarSparrowControllerAAA shipCtrl = shipObj.GetComponent<StarSparrowControllerAAA>();
+            SpaceshipController shipCtrl = shipObj.GetComponent<SpaceshipController>();
             if (shipCtrl == null)
             {
-                shipCtrl = shipObj.AddComponent<StarSparrowControllerAAA>();
+                shipCtrl = shipObj.AddComponent<SpaceshipController>();
             }
             shipCtrl.characterPlayer = this;
-            shipCtrl.aaaCamera = aaaCamera;
+            shipCtrl.thirdPersonCamera = thirdPersonCamera;
             shipCtrl.EnsureShipLightingRig();
+            shipCtrl.EnsureBottomHealthBarsUI();
         }
+
+        // Otomatis setup pesawat NPC Ally beserta lighting rig dan manuver penjaga stasiun
+        SpaceshipNPC.EnsureAllAllyNPCsSetup();
+        GameManager.EnsureGameManagerInScene();
     }
 	
     private bool wasGrounded;
@@ -129,6 +134,11 @@ public class MovementInput : MonoBehaviour {
 
 	// Update is called once per frame
 	void Update () {
+        if (GameManager.Instance != null && (GameManager.Instance.IsPaused || GameManager.Instance.IsGameOver))
+        {
+            return;
+        }
+
         horizontalMove = Vector3.zero;
 		InputMagnitude ();
 
@@ -138,9 +148,9 @@ public class MovementInput : MonoBehaviour {
         if (isGrounded && !wasGrounded)
         {
             // Efek pantulan halus pada kamera saat mendarat
-            if (aaaCamera != null && lastAirVelocity < -3f)
+            if (thirdPersonCamera != null && lastAirVelocity < -3f)
             {
-                aaaCamera.TriggerLandingImpact(Mathf.Abs(lastAirVelocity) * 0.08f);
+                thirdPersonCamera.TriggerLandingImpact(Mathf.Abs(lastAirVelocity) * 0.08f);
             }
 
             // Hanya putar animasi "Falling To Landing" jika jatuh dari tempat tinggi 
