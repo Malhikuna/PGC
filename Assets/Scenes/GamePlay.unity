@@ -43620,8 +43620,8 @@ MonoBehaviour:
   laserBoltLifetime: 2.2
   characterMaxHealth: 100
   characterCurrentHealth: 100
-  shipMaxHealth: 100
-  shipCurrentHealth: 100
+  shipMaxHealth: 350
+  shipCurrentHealth: 350
   characterHealthSlider: {fileID: 303589076}
   shipHealthSlider: {fileID: 1585910821}
   maxCruiseSpeed: 42
@@ -43697,8 +43697,8 @@ MonoBehaviour:
   isUsingGamepad: 1
   characterMaxHealth: 100
   characterCurrentHealth: 100
-  shipMaxHealth: 100
-  shipCurrentHealth: 100
+  shipMaxHealth: 350
+  shipCurrentHealth: 350
   characterHealthSlider: {fileID: 303589076}
   shipHealthSlider: {fileID: 1585910821}
   maxCruiseSpeed: 42
@@ -47074,8 +47074,8 @@ Transform:
   m_GameObject: {fileID: 663869669}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0.97, y: -0.5, z: -4.85}
-  m_LocalScale: {x: 0.3, y: 0.3, z: 0.66}
+  m_LocalPosition: {x: 0.36, y: -0.486, z: -4.9}
+  m_LocalScale: {x: 0.24, y: 0.24, z: 0.528}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1345452575}
@@ -98774,8 +98774,8 @@ Transform:
   m_GameObject: {fileID: 1311891918}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.97, y: -0.5, z: -4.85}
-  m_LocalScale: {x: 0.3, y: 0.3, z: 0.66}
+  m_LocalPosition: {x: -0.36, y: -0.486, z: -4.9}
+  m_LocalScale: {x: 0.24, y: 0.24, z: 0.528}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1345452575}
@@ -133277,8 +133277,8 @@ Transform:
   m_GameObject: {fileID: 1763976054}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: -0.28, z: -4.95}
-  m_LocalScale: {x: 0.38, y: 0.38, z: 0.836}
+  m_LocalPosition: {x: 0, y: 0.117, z: -4.95}
+  m_LocalScale: {x: 0.36, y: 0.36, z: 0.79200006}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 1345452575}
@@ -144594,7 +144594,7 @@ Transform:
   m_GameObject: {fileID: 1905982020}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: -0.15, z: -5.5}
+  m_LocalPosition: {x: 0, y: -0.15, z: -5.3}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -158236,13 +158236,13 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::GameManager
   enemyShipPrefab: {fileID: 1252231642234915799, guid: 66da195798424c04698d5be61b71775e, type: 3}
   stationCenterPosition: {x: 0, y: 4, z: 0}
-  initialWaveDelay: 3.5
-  timeBetweenWaves: 6
-  baseEnemiesPerWave: 3
-  extraEnemiesPerWave: 2
-  maxConcurrentEnemies: 10
-  stationMaxHealth: 1000
-  stationCurrentHealth: 1000
+  initialWaveDelay: 12
+  timeBetweenWaves: 30
+  baseEnemiesPerWave: 2
+  extraEnemiesPerWave: 1
+  maxConcurrentEnemies: 12
+  stationMaxHealth: 5000
+  stationCurrentHealth: 5000
   currentWave: 0
   enemiesDestroyed: 0
   survivalTime: 0

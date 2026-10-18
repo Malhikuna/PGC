@@ -119,6 +119,9 @@ public class SpaceshipNPC : MonoBehaviour
             anchorRecorded = true;
         }
 
+        combatFireRate = 3.2f;
+        combatLaserDamage = 14f;
+
         Vector3 flatFwd = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
         if (flatFwd.sqrMagnitude < 0.001f) flatFwd = Vector3.forward;
         smoothHeading = Quaternion.LookRotation(flatFwd.normalized, Vector3.up);
@@ -139,7 +142,7 @@ public class SpaceshipNPC : MonoBehaviour
             return;
         }
 
-        if (GameManager.Instance != null && GameManager.Instance.IsGameOver) return;
+        if (GameManager.Instance != null && (GameManager.Instance.IsGameOver || GameManager.Instance.IsInDestructionSequence)) return;
 
         float dt = Time.deltaTime;
 
@@ -188,14 +191,17 @@ public class SpaceshipNPC : MonoBehaviour
             desiredDir = toEnemy.normalized;
         }
 
-        // Obstacle avoidance against station structure
-        if (Physics.SphereCast(transform.position, 2.8f, transform.forward, out RaycastHit hit, 26f, ~0, QueryTriggerInteraction.Ignore))
+        // Throttled obstacle avoidance against station structure
+        if (((Time.frameCount + allyUnitIndex) % 3) == 0)
         {
-            if (!hit.collider.transform.IsChildOf(transform))
+            if (Physics.Raycast(transform.position, transform.forward, out RaycastHit hit, 26f, ~0, QueryTriggerInteraction.Ignore))
             {
-                Vector3 avoidDir = Vector3.ProjectOnPlane(transform.forward, hit.normal).normalized;
-                if (avoidDir.sqrMagnitude < 0.01f) avoidDir = Vector3.up;
-                desiredDir = Vector3.Slerp(desiredDir, (avoidDir + hit.normal * 0.65f + Vector3.up * 0.35f).normalized, 0.85f).normalized;
+                if (!hit.collider.transform.IsChildOf(transform))
+                {
+                    Vector3 avoidDir = Vector3.ProjectOnPlane(transform.forward, hit.normal).normalized;
+                    if (avoidDir.sqrMagnitude < 0.01f) avoidDir = Vector3.up;
+                    desiredDir = Vector3.Slerp(desiredDir, (avoidDir + hit.normal * 0.65f + Vector3.up * 0.35f).normalized, 0.85f).normalized;
+                }
             }
         }
 
@@ -273,6 +279,11 @@ public class SpaceshipNPC : MonoBehaviour
             combatLaserDamage,
             false
         );
+
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayBlasterShot(false, muzzlePos);
+        }
     }
 
     public void TakeDamage(float amount)
@@ -306,14 +317,17 @@ public class SpaceshipNPC : MonoBehaviour
 
         Vector3 desiredDir = toTarget.normalized;
 
-        // Obstacle avoidance
-        if (Physics.SphereCast(transform.position, 2.8f, transform.forward, out RaycastHit hit, 26f, ~0, QueryTriggerInteraction.Ignore))
+        // Throttled obstacle avoidance
+        if (((Time.frameCount + allyUnitIndex) % 3) == 0)
         {
-            if (!hit.collider.transform.IsChildOf(transform))
+            if (Physics.Raycast(transform.position, transform.forward, out RaycastHit hit, 26f, ~0, QueryTriggerInteraction.Ignore))
             {
-                Vector3 avoidDir = Vector3.ProjectOnPlane(transform.forward, hit.normal).normalized;
-                if (avoidDir.sqrMagnitude < 0.01f) avoidDir = Vector3.up;
-                desiredDir = Vector3.Slerp(desiredDir, (avoidDir + hit.normal * 0.65f + Vector3.up * 0.35f).normalized, 0.85f).normalized;
+                if (!hit.collider.transform.IsChildOf(transform))
+                {
+                    Vector3 avoidDir = Vector3.ProjectOnPlane(transform.forward, hit.normal).normalized;
+                    if (avoidDir.sqrMagnitude < 0.01f) avoidDir = Vector3.up;
+                    desiredDir = Vector3.Slerp(desiredDir, (avoidDir + hit.normal * 0.65f + Vector3.up * 0.35f).normalized, 0.85f).normalized;
+                }
             }
         }
 

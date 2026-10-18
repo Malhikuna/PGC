@@ -1,8 +1,11 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System.Collections;
 using UnityEngine.UI;
 using TMPro;
 using UnityEngine.SceneManagement;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.UI;
 
 namespace SlimUI.ModernMenu{
 	public class UIMenuManager : MonoBehaviour {
@@ -81,6 +84,12 @@ namespace SlimUI.ModernMenu{
         public AudioSource swooshSound;
 
 		void Start(){
+			Time.timeScale = 1f;
+			Cursor.lockState = CursorLockMode.None;
+			Cursor.visible = true;
+
+			EnsureNewInputSystemEventSystem();
+
 			CameraObject = transform.GetComponent<Animator>();
 
 			playMenu.SetActive(false);
@@ -90,6 +99,27 @@ namespace SlimUI.ModernMenu{
 			mainMenu.SetActive(true);
 
 			SetThemeColors();
+		}
+
+		private void EnsureNewInputSystemEventSystem()
+		{
+			EventSystem[] eventSystems = FindObjectsByType<EventSystem>(FindObjectsSortMode.None);
+			for (int i = 0; i < eventSystems.Length; i++)
+			{
+				EventSystem es = eventSystems[i];
+				if (es == null) continue;
+
+				StandaloneInputModule legacyModule = es.GetComponent<StandaloneInputModule>();
+				if (legacyModule != null)
+				{
+					Destroy(legacyModule);
+				}
+
+				if (es.GetComponent<InputSystemUIInputModule>() == null)
+				{
+					es.gameObject.AddComponent<InputSystemUIInputModule>();
+				}
+			}
 		}
 
 		void SetThemeColors()
@@ -138,9 +168,8 @@ namespace SlimUI.ModernMenu{
 		}
 
 		public void LoadScene(string scene){
-			if(scene != ""){
-				StartCoroutine(LoadAsynchronously(scene));
-			}
+			string targetScene = (string.IsNullOrEmpty(scene) || scene == "Demo1Scene2") ? "GamePlay" : scene;
+			StartCoroutine(LoadAsynchronously(targetScene));
 		}
 
 		public void  DisablePlayCampaign(){
@@ -273,10 +302,21 @@ namespace SlimUI.ModernMenu{
 				loadingBar.value = progress;
 
 				if (operation.progress >= 0.9f && waitForInput){
-					loadPromptText.text = "Press " + userPromptKey.ToString().ToUpper() + " to continue";
+					bool isGamepad = Gamepad.current != null;
+					loadPromptText.text = isGamepad
+						? "Press [A] or [SPACE] to continue"
+						: "Press " + userPromptKey.ToString().ToUpper() + " or CLICK to continue";
 					loadingBar.value = 1;
 
-					if (Input.GetKeyDown(userPromptKey)){
+					bool confirmPressed = false;
+					if (Keyboard.current != null && (Keyboard.current.spaceKey.wasPressedThisFrame || Keyboard.current.enterKey.wasPressedThisFrame || Keyboard.current.anyKey.wasPressedThisFrame))
+						confirmPressed = true;
+					if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame)
+						confirmPressed = true;
+					if (Gamepad.current != null && (Gamepad.current.buttonSouth.wasPressedThisFrame || Gamepad.current.startButton.wasPressedThisFrame))
+						confirmPressed = true;
+
+					if (confirmPressed){
 						operation.allowSceneActivation = true;
 					}
                 }else if(operation.progress >= 0.9f && !waitForInput){

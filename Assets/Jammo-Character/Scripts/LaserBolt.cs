@@ -1,8 +1,9 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Laser bolt projectile fired by Player, Ally NPC, or Enemy spaceships.
-/// Supports team-based hit detection, customizable plasma colors, dynamic point lighting, and impact flashes.
+/// High-performance pooled LaserBolt projectile fired by Player, Ally NPC, or Enemy spaceships.
+/// Uses object pooling and shared unlit materials/meshes for zero GC allocation and high FPS during combat.
 /// </summary>
 public class LaserBolt : MonoBehaviour
 {
@@ -13,15 +14,19 @@ public class LaserBolt : MonoBehaviour
     }
 
     public float speed = 240f;
-    public float lifetime = 2.2f;
+    public float lifetime = 2.0f;
     public float damage = 18f;
     public Transform ownerRoot;
     public Faction faction = Faction.Friendly;
     public bool damagesStationOnHit = false;
 
     private float spawnTime;
-    private Color boltGlowColor;
+    private int frameCounter;
+    private Renderer coreRenderer;
+    private Renderer auraRenderer;
 
+    private static readonly Stack<LaserBolt> boltPool = new Stack<LaserBolt>(64);
+    private static Mesh cachedSphereMesh;
     private static Material sharedFriendlyCoreMat;
     private static Material sharedFriendlyGlowMat;
     private static Material sharedEnemyCoreMat;
@@ -37,81 +42,87 @@ public class LaserBolt : MonoBehaviour
         float boltDamage = 18f,
         bool canDamageStation = false)
     {
-        GameObject boltObj = new GameObject(boltFaction == Faction.Enemy ? "Enemy_LaserBolt" : "Spaceship_LaserBolt");
-        boltObj.transform.position = position;
-        boltObj.transform.rotation = rotation;
+        EnsureSharedAssets();
 
-        LaserBolt bolt = boltObj.AddComponent<LaserBolt>();
+        LaserBolt bolt = null;
+        while (boltPool.Count > 0 && bolt == null)
+        {
+            bolt = boltPool.Pop();
+        }
+
+        if (bolt == null)
+        {
+            GameObject boltObj = new GameObject("Pooled_LaserBolt");
+            bolt = boltObj.AddComponent<LaserBolt>();
+            bolt.BuildVisualHierarchy();
+        }
+
+        bolt.transform.SetPositionAndRotation(position, rotation);
         bolt.speed = boltSpeed;
         bolt.lifetime = boltLifetime;
         bolt.ownerRoot = owner;
         bolt.faction = boltFaction;
         bolt.damage = boltDamage;
         bolt.damagesStationOnHit = canDamageStation;
-        bolt.BuildVisuals();
+        bolt.spawnTime = Time.time;
+        bolt.frameCounter = Random.Range(0, 2);
+        bolt.ApplyFactionMaterials();
+        bolt.gameObject.SetActive(true);
 
         return bolt;
     }
 
-    private void Awake()
+    private void BuildVisualHierarchy()
     {
-        spawnTime = Time.time;
-    }
+        EnsureSharedAssets();
 
-    private void BuildVisuals()
-    {
-        EnsureMaterials();
-
-        bool isEnemy = (faction == Faction.Enemy);
-        Material coreMat = isEnemy ? sharedEnemyCoreMat : sharedFriendlyCoreMat;
-        Material glowMat = isEnemy ? sharedEnemyGlowMat : sharedFriendlyGlowMat;
-        boltGlowColor = isEnemy ? new Color(1.0f, 0.15f, 0.18f) : new Color(0.2f, 0.8f, 1.0f);
-
-        // 1. Plasma core
-        GameObject core = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        core.name = "Bolt_Core";
+        // 1. Plasma core mesh
+        GameObject core = new GameObject("Bolt_Core");
         core.transform.SetParent(transform, false);
         core.transform.localPosition = Vector3.zero;
         core.transform.localScale = new Vector3(0.18f, 0.18f, 3.2f);
-        Collider coreCol = core.GetComponent<Collider>();
-        if (coreCol != null) Destroy(coreCol);
+        MeshFilter coreMf = core.AddComponent<MeshFilter>();
+        coreMf.sharedMesh = cachedSphereMesh;
+        coreRenderer = core.AddComponent<MeshRenderer>();
+        coreRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        coreRenderer.receiveShadows = false;
 
-        Renderer coreRend = core.GetComponent<Renderer>();
-        if (coreRend != null && coreMat != null)
-        {
-            coreRend.sharedMaterial = coreMat;
-            coreRend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            coreRend.receiveShadows = false;
-        }
-
-        // 2. Plasma glow aura
-        GameObject aura = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        aura.name = "Bolt_Aura";
+        // 2. Plasma glow aura mesh
+        GameObject aura = new GameObject("Bolt_Aura");
         aura.transform.SetParent(transform, false);
         aura.transform.localPosition = Vector3.zero;
         aura.transform.localScale = new Vector3(0.36f, 0.36f, 4.0f);
-        Collider auraCol = aura.GetComponent<Collider>();
-        if (auraCol != null) Destroy(auraCol);
-
-        Renderer auraRend = aura.GetComponent<Renderer>();
-        if (auraRend != null && glowMat != null)
-        {
-            auraRend.sharedMaterial = glowMat;
-            auraRend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            auraRend.receiveShadows = false;
-        }
-
-        // 3. Point light illuminating nearby surroundings
-        Light boltLight = gameObject.AddComponent<Light>();
-        boltLight.type = LightType.Point;
-        boltLight.color = boltGlowColor;
-        boltLight.intensity = 9f;
-        boltLight.range = 14f;
-        boltLight.shadows = LightShadows.None;
+        MeshFilter auraMf = aura.AddComponent<MeshFilter>();
+        auraMf.sharedMesh = cachedSphereMesh;
+        auraRenderer = aura.AddComponent<MeshRenderer>();
+        auraRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+        auraRenderer.receiveShadows = false;
     }
 
-    private static void EnsureMaterials()
+    private void ApplyFactionMaterials()
     {
+        bool isEnemy = (faction == Faction.Enemy);
+        if (coreRenderer != null)
+        {
+            coreRenderer.sharedMaterial = isEnemy ? sharedEnemyCoreMat : sharedFriendlyCoreMat;
+        }
+        if (auraRenderer != null)
+        {
+            auraRenderer.sharedMaterial = isEnemy ? sharedEnemyGlowMat : sharedFriendlyGlowMat;
+        }
+    }
+
+    private static void EnsureSharedAssets()
+    {
+        if (cachedSphereMesh == null)
+        {
+            GameObject temp = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            MeshFilter mf = temp.GetComponent<MeshFilter>();
+            if (mf != null) cachedSphereMesh = mf.sharedMesh;
+            if (Application.isPlaying) Destroy(temp);
+            else DestroyImmediate(temp);
+        }
+
         if (sharedFriendlyCoreMat != null && sharedEnemyCoreMat != null) return;
 
         Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit");
@@ -119,7 +130,6 @@ public class LaserBolt : MonoBehaviour
 
         if (unlitShader != null)
         {
-            // Friendly (Cyan/Blue)
             sharedFriendlyCoreMat = new Material(unlitShader);
             Color fCoreCol = new Color(0.85f, 0.98f, 1.0f, 1f);
             sharedFriendlyCoreMat.color = fCoreCol;
@@ -132,7 +142,6 @@ public class LaserBolt : MonoBehaviour
             if (sharedFriendlyGlowMat.HasProperty("_BaseColor"))
                 sharedFriendlyGlowMat.SetColor("_BaseColor", fGlowCol);
 
-            // Enemy (Crimson Red)
             sharedEnemyCoreMat = new Material(unlitShader);
             Color eCoreCol = new Color(1.0f, 0.82f, 0.82f, 1f);
             sharedEnemyCoreMat.color = eCoreCol;
@@ -147,96 +156,97 @@ public class LaserBolt : MonoBehaviour
         }
     }
 
+    private void ReturnToPool()
+    {
+        gameObject.SetActive(false);
+        boltPool.Push(this);
+    }
+
     private void Update()
     {
         if (Time.time - spawnTime >= lifetime)
         {
-            Destroy(gameObject);
+            ReturnToPool();
             return;
         }
 
         float dt = Time.deltaTime;
         float moveDist = speed * dt;
-        Vector3 nextPos = transform.position + transform.forward * moveDist;
+        Vector3 currentPos = transform.position;
+        Vector3 nextPos = currentPos + transform.forward * moveDist;
 
-        // 1. Proximity check against ships (generous hitbox for high-speed space dogfighting)
+        // 1. Fast math proximity check against ships (zero physics overhead)
         if (faction == Faction.Friendly)
         {
-            EnemySpaceship hitEnemy = EnemySpaceship.FindEnemyHitBySegment(transform.position, nextPos, 3.6f);
+            EnemySpaceship hitEnemy = EnemySpaceship.FindEnemyHitBySegment(currentPos, nextPos, 3.8f);
             if (hitEnemy != null)
             {
                 hitEnemy.TakeDamage(damage, ownerRoot);
-                SpawnImpactFlash(hitEnemy.transform.position, -transform.forward);
-                Destroy(gameObject);
+                ReturnToPool();
                 return;
             }
         }
-        else if (faction == Faction.Enemy)
+        else
         {
-            // Check hit against Player Spaceship or Character
             SpaceshipController playerShip = SpaceshipController.Instance;
             if (playerShip != null)
             {
                 if (playerShip.isPiloting)
                 {
-                    float distSq = DistancePointToSegmentSq(playerShip.transform.position, transform.position, nextPos);
+                    float distSq = DistancePointToSegmentSq(playerShip.transform.position, currentPos, nextPos);
                     if (distSq <= 4.2f * 4.2f)
                     {
                         playerShip.TakeShipDamage(damage);
-                        SpawnImpactFlash(nextPos, -transform.forward);
-                        Destroy(gameObject);
+                        ReturnToPool();
                         return;
                     }
                 }
                 else if (playerShip.characterPlayer != null)
                 {
                     Vector3 charPos = playerShip.characterPlayer.transform.position + Vector3.up * 1.0f;
-                    float distSq = DistancePointToSegmentSq(charPos, transform.position, nextPos);
+                    float distSq = DistancePointToSegmentSq(charPos, currentPos, nextPos);
                     if (distSq <= 2.5f * 2.5f)
                     {
                         playerShip.TakeCharacterDamage(damage);
-                        SpawnImpactFlash(nextPos, -transform.forward);
-                        Destroy(gameObject);
+                        ReturnToPool();
                         return;
                     }
                 }
             }
 
-            // Check hit against Ally NPC ships
-            SpaceshipNPC hitAlly = SpaceshipNPC.FindAllyHitBySegment(transform.position, nextPos, 3.8f);
+            SpaceshipNPC hitAlly = SpaceshipNPC.FindAllyHitBySegment(currentPos, nextPos, 3.8f);
             if (hitAlly != null)
             {
                 hitAlly.TakeDamage(damage);
-                SpawnImpactFlash(hitAlly.transform.position, -transform.forward);
-                Destroy(gameObject);
+                ReturnToPool();
                 return;
+            }
+
+            if (damagesStationOnHit && GameManager.Instance != null)
+            {
+                Vector3 stationCenter = GameManager.Instance.GetStationTargetPosition();
+                float distSq = DistancePointToSegmentSq(stationCenter, currentPos, nextPos);
+                if (distSq <= 16f * 16f)
+                {
+                    GameManager.Instance.DamageStation(damage);
+                    ReturnToPool();
+                    return;
+                }
             }
         }
 
-        // 2. Physics SphereCast against colliders (station, asteroids, ship colliders)
-        float castRadius = faction == Faction.Friendly ? 0.55f : 0.45f;
-        if (Physics.SphereCast(transform.position, castRadius, transform.forward, out RaycastHit hit, moveDist + 0.5f, ~0, QueryTriggerInteraction.Ignore))
+        // 2. Throttled raycast against station/environment geometry (every 2nd frame to cut physics cost by 50%)
+        frameCounter++;
+        if ((frameCounter & 1) == 0)
         {
-            if (ownerRoot == null || !hit.collider.transform.IsChildOf(ownerRoot))
+            if (Physics.Raycast(currentPos, transform.forward, out RaycastHit hit, moveDist * 2.0f, ~0, QueryTriggerInteraction.Ignore))
             {
-                HandleColliderHit(hit);
-                SpawnImpactFlash(hit.point, hit.normal);
-                Destroy(gameObject);
-                return;
-            }
-        }
-
-        // 3. Check if an enemy bolt aimed at the station reached the station core area
-        if (faction == Faction.Enemy && damagesStationOnHit && GameManager.Instance != null)
-        {
-            Vector3 stationCenter = GameManager.Instance.GetStationTargetPosition();
-            float distSq = DistancePointToSegmentSq(stationCenter, transform.position, nextPos);
-            if (distSq <= 16f * 16f)
-            {
-                GameManager.Instance.DamageStation(damage);
-                SpawnImpactFlash(nextPos, -transform.forward);
-                Destroy(gameObject);
-                return;
+                if (ownerRoot == null || !hit.collider.transform.IsChildOf(ownerRoot))
+                {
+                    HandleColliderHit(hit);
+                    ReturnToPool();
+                    return;
+                }
             }
         }
 
@@ -255,7 +265,7 @@ public class LaserBolt : MonoBehaviour
                 enemy.TakeDamage(damage, ownerRoot);
             }
         }
-        else if (faction == Faction.Enemy)
+        else
         {
             SpaceshipController playerShip = hitTrans.GetComponentInParent<SpaceshipController>();
             if (playerShip != null)
@@ -278,11 +288,10 @@ public class LaserBolt : MonoBehaviour
                 return;
             }
 
-            // Otherwise, if enemy hit station structure, apply station damage
             if (GameManager.Instance != null)
             {
-                float distToStation = Vector3.Distance(hit.point, GameManager.Instance.GetStationTargetPosition());
-                if (distToStation < 110f)
+                float distToStationSq = (hit.point - GameManager.Instance.GetStationTargetPosition()).sqrMagnitude;
+                if (distToStationSq < 110f * 110f)
                 {
                     GameManager.Instance.DamageStation(damage);
                 }
@@ -298,37 +307,5 @@ public class LaserBolt : MonoBehaviour
         float t = Mathf.Clamp01(Vector3.Dot(point - segA, ab) / abLenSq);
         Vector3 projection = segA + ab * t;
         return (point - projection).sqrMagnitude;
-    }
-
-    private void SpawnImpactFlash(Vector3 hitPoint, Vector3 hitNormal)
-    {
-        EnsureMaterials();
-
-        Material glowMat = (faction == Faction.Enemy) ? sharedEnemyGlowMat : sharedFriendlyGlowMat;
-
-        GameObject flashObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        flashObj.name = "Laser_ImpactFlash";
-        flashObj.transform.position = hitPoint + hitNormal * 0.15f;
-        flashObj.transform.localScale = Vector3.one * 1.55f;
-
-        Collider col = flashObj.GetComponent<Collider>();
-        if (col != null) Destroy(col);
-
-        Renderer rend = flashObj.GetComponent<Renderer>();
-        if (rend != null && glowMat != null)
-        {
-            rend.sharedMaterial = glowMat;
-            rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            rend.receiveShadows = false;
-        }
-
-        Light flashLight = flashObj.AddComponent<Light>();
-        flashLight.type = LightType.Point;
-        flashLight.color = boltGlowColor;
-        flashLight.intensity = 22f;
-        flashLight.range = 16f;
-        flashLight.shadows = LightShadows.None;
-
-        Destroy(flashObj, 0.18f);
     }
 }

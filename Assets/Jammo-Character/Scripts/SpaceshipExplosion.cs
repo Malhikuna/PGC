@@ -48,6 +48,7 @@ public class SpaceshipExplosion : MonoBehaviour
 
     private static Shader cachedUnlitShader;
     private static Material sharedSparkTrailMat;
+    private static Material sharedExplosionBaseMat;
     private MaterialPropertyBlock propBlock;
 
     /// <summary>
@@ -99,6 +100,14 @@ public class SpaceshipExplosion : MonoBehaviour
                 sharedSparkTrailMat.SetColor("_BaseColor", c);
         }
 
+        if (sharedExplosionBaseMat == null && cachedUnlitShader != null)
+        {
+            sharedExplosionBaseMat = new Material(cachedUnlitShader);
+            sharedExplosionBaseMat.color = Color.white;
+            if (sharedExplosionBaseMat.HasProperty("_BaseColor"))
+                sharedExplosionBaseMat.SetColor("_BaseColor", Color.white);
+        }
+
         // 1. White-Hot Plasma Core Flash Sphere
         GameObject coreObj = CreateUnlitPrimitive(PrimitiveType.Sphere, "Blast_CoreFlash", new Color(1f, 0.96f, 0.82f, 1f));
         coreFlashTransform = coreObj.transform;
@@ -119,8 +128,8 @@ public class SpaceshipExplosion : MonoBehaviour
         secondaryRingTransform.localScale = new Vector3(0.8f, 0.04f, 0.8f) * scaleMultiplier;
         secondaryRingRenderer = ring2.GetComponent<Renderer>();
 
-        // 4. Rolling Secondary Fireballs (10 spheres expanding & cooling from yellow-orange to crimson-smoke)
-        int fireballCount = 10;
+        // 4. Rolling Secondary Fireballs (7 spheres expanding & cooling from yellow-orange to crimson-smoke)
+        int fireballCount = 7;
         for (int i = 0; i < fireballCount; i++)
         {
             GameObject fbObj = CreateUnlitPrimitive(PrimitiveType.Sphere, "Fireball_" + i, new Color(1f, 0.55f, 0.12f, 1f));
@@ -143,7 +152,7 @@ public class SpaceshipExplosion : MonoBehaviour
         }
 
         // 5. High-Velocity Flaming Shrapnel Debris & Plasma Sparks with Glowing Fire Trails
-        int sparkCount = 18;
+        int sparkCount = 12;
         for (int i = 0; i < sparkCount; i++)
         {
             PrimitiveType prim = (i % 3 == 0) ? PrimitiveType.Cube : PrimitiveType.Sphere;
@@ -198,15 +207,12 @@ public class SpaceshipExplosion : MonoBehaviour
         if (col != null) Destroy(col);
 
         Renderer rend = obj.GetComponent<Renderer>();
-        if (rend != null && cachedUnlitShader != null)
+        if (rend != null && sharedExplosionBaseMat != null)
         {
-            Material mat = new Material(cachedUnlitShader);
-            mat.color = initialColor;
-            if (mat.HasProperty("_BaseColor"))
-                mat.SetColor("_BaseColor", initialColor);
-            rend.sharedMaterial = mat;
+            rend.sharedMaterial = sharedExplosionBaseMat;
             rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             rend.receiveShadows = false;
+            SetRendererColor(rend, initialColor);
         }
 
         return obj;
@@ -214,7 +220,8 @@ public class SpaceshipExplosion : MonoBehaviour
 
     private void Update()
     {
-        float dt = Time.deltaTime;
+        // During slow-motion destruction sequences (timeScale = 0.25), advance explosion at a rich cinematic pace
+        float dt = (Time.timeScale < 0.5f && Time.timeScale > 0.01f) ? (Time.unscaledDeltaTime * 0.55f) : Time.deltaTime;
         elapsed += dt;
 
         if (elapsed >= totalDuration)

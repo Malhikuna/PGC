@@ -51,9 +51,9 @@ public class SpaceshipController : MonoBehaviour
     [Tooltip("Current character health (Red).")]
     public float characterCurrentHealth = 100f;
     [Tooltip("Maximum spaceship health (Blue).")]
-    public float shipMaxHealth = 100f;
+    public float shipMaxHealth = 350f;
     [Tooltip("Current spaceship health (Blue).")]
-    public float shipCurrentHealth = 100f;
+    public float shipCurrentHealth = 350f;
     [Tooltip("Character health slider (Red) at the bottom.")]
     public Slider characterHealthSlider;
     [Tooltip("Spaceship health slider (Blue) at the bottom - active only in ship mode.")]
@@ -150,6 +150,9 @@ public class SpaceshipController : MonoBehaviour
     private Transform[] thrusterFlames;
 
     private Renderer[] characterRenderers;
+    private Renderer[] shipRenderers;
+    private Text cachedCharacterHpLabel;
+    private Text cachedShipHpLabel;
 
     private void OnEnable()
     {
@@ -158,12 +161,14 @@ public class SpaceshipController : MonoBehaviour
         EnsureBottomHealthBarsUI();
         SpaceshipNPC.EnsureAllAllyNPCsSetup();
         GameManager.EnsureGameManagerInScene();
+        AudioManager.EnsureAudioManagerInScene();
 
         if (Application.isPlaying)
         {
             baseOrientation = transform.rotation;
             initialIdlePosition = transform.position;
             idleOriginRecorded = true;
+            SetShipRenderersVisible(true);
         }
     }
 
@@ -179,9 +184,11 @@ public class SpaceshipController : MonoBehaviour
         EnsureBottomHealthBarsUI();
         SpaceshipNPC.EnsureAllAllyNPCsSetup();
         GameManager.EnsureGameManagerInScene();
+        AudioManager.EnsureAudioManagerInScene();
 
         if (!Application.isPlaying) return;
 
+        SetShipRenderersVisible(true);
         baseOrientation = transform.rotation;
         Vector3 flatForward = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
         if (flatForward.sqrMagnitude > 0.001f)
@@ -206,6 +213,17 @@ public class SpaceshipController : MonoBehaviour
             idleOriginRecorded = true;
         }
 
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.SetSpaceshipAudioMode(isPiloting, forceRefresh: true);
+        }
+
+        if (shipMaxHealth < 250f)
+        {
+            shipMaxHealth = 350f;
+            shipCurrentHealth = shipMaxHealth;
+        }
+
         EnsureBottomHealthBarsUI();
     }
 
@@ -223,7 +241,7 @@ public class SpaceshipController : MonoBehaviour
 
         DetectActiveInputDevice();
 
-        if (GameManager.Instance != null && (GameManager.Instance.IsGameOver || GameManager.Instance.IsPaused))
+        if (GameManager.Instance != null && (GameManager.Instance.IsGameOver || GameManager.Instance.IsPaused || GameManager.Instance.IsInDestructionSequence))
         {
             return;
         }
@@ -392,24 +410,39 @@ public class SpaceshipController : MonoBehaviour
 
     public void TakeShipDamage(float amount)
     {
-        if (GameManager.Instance != null && GameManager.Instance.IsGameOver) return;
+        if (GameManager.Instance != null && (GameManager.Instance.IsGameOver || GameManager.Instance.IsInDestructionSequence)) return;
 
         shipCurrentHealth = Mathf.Max(0f, shipCurrentHealth - amount);
         UpdateBottomHealthBarsUI();
 
         if (shipCurrentHealth <= 0f)
         {
-            SpaceshipExplosion.Spawn(transform.position, 1.45f);
+            SetShipRenderersVisible(false);
             if (GameManager.Instance != null)
             {
-                GameManager.Instance.TriggerGameOver("PLAYER SPACESHIP DESTROYED IN COMBAT");
+                GameManager.Instance.TriggerPlayerShipDestruction(transform.position);
+            }
+        }
+    }
+
+    private void SetShipRenderersVisible(bool visible)
+    {
+        if (shipRenderers == null || shipRenderers.Length == 0)
+        {
+            shipRenderers = GetComponentsInChildren<Renderer>(true);
+        }
+        for (int i = 0; i < shipRenderers.Length; i++)
+        {
+            if (shipRenderers[i] != null)
+            {
+                shipRenderers[i].enabled = visible;
             }
         }
     }
 
     public void TakeCharacterDamage(float amount)
     {
-        if (GameManager.Instance != null && GameManager.Instance.IsGameOver) return;
+        if (GameManager.Instance != null && (GameManager.Instance.IsGameOver || GameManager.Instance.IsInDestructionSequence)) return;
 
         characterCurrentHealth = Mathf.Max(0f, characterCurrentHealth - amount);
         UpdateBottomHealthBarsUI();
@@ -479,6 +512,12 @@ public class SpaceshipController : MonoBehaviour
                 laserBoltDamage,
                 false
             );
+        }
+
+        // Play blaster-shot SFX from AudioManager
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayBlasterShot(true, transform.position);
         }
 
         muzzleFlashIntensity = 26f;
@@ -565,6 +604,12 @@ public class SpaceshipController : MonoBehaviour
         if (isPiloting)
         {
             baseOrientation = transform.rotation;
+        }
+
+        // Switch between Station audio and Outer Space ambience (space.mp3)
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.SetSpaceshipAudioMode(isPiloting);
         }
 
         UpdateBottomHealthBarsUI();
@@ -893,10 +938,10 @@ public class SpaceshipController : MonoBehaviour
             characterHealthSlider.maxValue = characterMaxHealth;
             characterHealthSlider.value = characterCurrentHealth;
 
-            Text label = characterHealthSlider.transform.Find("Label")?.GetComponent<Text>();
-            if (label != null && label.text != "CHARACTER HP")
+            if (cachedCharacterHpLabel == null)
             {
-                label.text = "CHARACTER HP";
+                cachedCharacterHpLabel = characterHealthSlider.transform.Find("Label")?.GetComponent<Text>();
+                if (cachedCharacterHpLabel != null) cachedCharacterHpLabel.text = "CHARACTER HP";
             }
 
             if (!characterHealthSlider.gameObject.activeSelf)
@@ -912,10 +957,10 @@ public class SpaceshipController : MonoBehaviour
             shipHealthSlider.maxValue = shipMaxHealth;
             shipHealthSlider.value = shipCurrentHealth;
 
-            Text label = shipHealthSlider.transform.Find("Label")?.GetComponent<Text>();
-            if (label != null && label.text != "SPACESHIP HP")
+            if (cachedShipHpLabel == null)
             {
-                label.text = "SPACESHIP HP";
+                cachedShipHpLabel = shipHealthSlider.transform.Find("Label")?.GetComponent<Text>();
+                if (cachedShipHpLabel != null) cachedShipHpLabel.text = "SPACESHIP HP";
             }
 
             if (shipHealthSlider.gameObject.activeSelf != isPiloting)
@@ -983,7 +1028,7 @@ public class SpaceshipController : MonoBehaviour
         thrusterLight = GetOrCreateLight(
             "Thruster_EngineGlow",
             LightType.Point,
-            new Vector3(0f, -0.15f, -5.5f),
+            new Vector3(0f, -0.15f, -5.3f),
             Quaternion.identity,
             new Color(0.15f, 0.75f, 1.0f),
             thrusterBaseIntensity,
@@ -1062,13 +1107,14 @@ public class SpaceshipController : MonoBehaviour
 
     private void EnsureThrusterFlames()
     {
+        // Posisi ke-3 knalpot mesin StarSparrow21 berdasarkan prefab StarSparrow21
         Vector3[] nozzlePositions = new Vector3[]
         {
-            new Vector3(0f, -0.28f, -4.95f),
-            new Vector3(0.97f, -0.50f, -4.85f),
-            new Vector3(-0.97f, -0.50f, -4.85f)
+            new Vector3(0f, 0.117f, -4.95f),
+            new Vector3(0.36f, -0.486f, -4.90f),
+            new Vector3(-0.36f, -0.486f, -4.90f)
         };
-        float[] nozzleScales = new float[] { 0.38f, 0.30f, 0.30f };
+        float[] nozzleScales = new float[] { 0.36f, 0.24f, 0.24f };
 
         thrusterFlames = new Transform[3];
 
@@ -1134,7 +1180,7 @@ public class SpaceshipController : MonoBehaviour
 
         if (thrusterFlames != null)
         {
-            float[] baseScales = new float[] { 0.38f, 0.30f, 0.30f };
+            float[] baseScales = new float[] { 0.36f, 0.24f, 0.24f };
             for (int i = 0; i < thrusterFlames.Length; i++)
             {
                 if (thrusterFlames[i] == null) continue;

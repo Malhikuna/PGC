@@ -28,19 +28,23 @@ public class GameManager : MonoBehaviour
     [Tooltip("Center position of the Space Station that enemies attack and player/NPCs defend.")]
     public Vector3 stationCenterPosition = new Vector3(0f, 4f, 0f);
     [Tooltip("Countdown duration before Wave 1 starts when pressing Play (seconds).")]
-    public float initialWaveDelay = 10.0f;
-    [Tooltip("Countdown duration when transitioning to the next wave after clearing a wave (seconds).")]
-    public float timeBetweenWaves = 8.0f;
-    [Tooltip("Number of enemies in Wave 1.")]
-    public int baseEnemiesPerWave = 3;
-    [Tooltip("Additional enemies added per subsequent wave.")]
-    public int extraEnemiesPerWave = 2;
-    [Tooltip("Maximum concurrent active enemies at once.")]
-    public int maxConcurrentEnemies = 10;
+    public float initialWaveDelay = 12.0f;
+    [Tooltip("Countdown duration when transitioning to the next wave after clearing a wave (30 seconds).")]
+    public float timeBetweenWaves = 30.0f;
+    [Tooltip("Active duration of each wave during which enemies continuously spawn (120 seconds = 2 minutes).")]
+    public float waveDuration = 120.0f;
+    [Tooltip("Maximum concurrent active enemies in Wave 1 (set to 2).")]
+    public int baseEnemiesPerWave = 2;
+    [Tooltip("Additional concurrent enemy cap added per wave.")]
+    public int extraEnemiesPerWave = 1;
+    [Tooltip("Absolute maximum concurrent active enemies at once across all waves.")]
+    public int maxConcurrentEnemies = 12;
 
     [Header("Space Station Health")]
-    public float stationMaxHealth = 1000f;
-    public float stationCurrentHealth = 1000f;
+    public float stationMaxHealth = 5000f;
+    public float stationCurrentHealth = 5000f;
+    [Tooltip("Passive shield recharge rate per second when not taking damage for 6 seconds.")]
+    public float stationShieldRechargeRate = 15f;
 
     [Header("Live Mission State")]
     public int currentWave = 0;
@@ -48,6 +52,7 @@ public class GameManager : MonoBehaviour
     public float survivalTime = 0f;
     public bool IsGameOver { get; private set; } = false;
     public bool IsPaused { get; private set; } = false;
+    public bool IsInDestructionSequence { get; private set; } = false;
     public string gameOverReason = "";
 
     [Header("3D Modern Menu UI Assets (Auto-Loaded)")]
@@ -118,8 +123,12 @@ public class GameManager : MonoBehaviour
     private bool waveInProgress = false;
     private bool waitingForNextWave = false;
     private float nextWaveCountdown = 0f;
-    private float currentWaveTotalCountdown = 10f;
-    private int enemiesToSpawnInCurrentWave = 0;
+    private float currentWaveTotalCountdown = 30f;
+    private float waveRemainingDuration = 0f;
+    private int currentWaveMaxActiveEnemies = 6;
+    private float nextReinforcementSpawnTimer = 0f;
+    private int waveTotalSpawnedCount = 0;
+    private bool waveTimeExpiredAlertShown = false;
 
     private static Sprite cachedRingSprite;
     private static Sprite cachedSolidSprite;
@@ -136,6 +145,7 @@ public class GameManager : MonoBehaviour
         EnsureEnemyPrefabLoaded();
         EnsureModernMenuAssetsLoaded();
         EnsureHUDElements();
+        AudioManager.EnsureAudioManagerInScene();
     }
 
     private void OnDisable()
@@ -143,6 +153,7 @@ public class GameManager : MonoBehaviour
         if (Application.isPlaying)
         {
             Time.timeScale = 1f;
+            Time.fixedDeltaTime = 0.02f;
         }
     }
 
@@ -151,6 +162,7 @@ public class GameManager : MonoBehaviour
         Instance = this;
         EnsureEnemyPrefabLoaded();
         EnsureModernMenuAssetsLoaded();
+        AudioManager.EnsureAudioManagerInScene();
     }
 
     private void Start()
@@ -159,17 +171,26 @@ public class GameManager : MonoBehaviour
         EnsureModernMenuAssetsLoaded();
         EnsureEventSystemAndAudio();
         EnsureHUDElements();
+        AudioManager.EnsureAudioManagerInScene();
 
         if (!Application.isPlaying) return;
 
         Time.timeScale = 1f;
+        Time.fixedDeltaTime = 0.02f;
         IsPaused = false;
         IsGameOver = false;
+        IsInDestructionSequence = false;
 
-        // Ensure generous pre-wave countdown timer even if older smaller values were serialized
-        if (initialWaveDelay < 8.0f) initialWaveDelay = 10.0f;
-        if (timeBetweenWaves < 6.0f) timeBetweenWaves = 8.0f;
+        // Enforce 30s between waves, 120s (2 minutes) wave duration, and base 2 concurrent enemies in wave 1
+        if (initialWaveDelay < 10.0f) initialWaveDelay = 12.0f;
+        timeBetweenWaves = 30.0f;
+        waveDuration = 120.0f;
+        baseEnemiesPerWave = 2;
+        if (extraEnemiesPerWave < 1) extraEnemiesPerWave = 1;
+        if (maxConcurrentEnemies < 12) maxConcurrentEnemies = 12;
 
+        // Ensure station has robust health pool so it is tanky and not easily destroyed
+        if (stationMaxHealth < 4500f) stationMaxHealth = 5000f;
         stationCurrentHealth = stationMaxHealth;
         currentWave = 0;
         enemiesDestroyed = 0;
@@ -204,6 +225,12 @@ public class GameManager : MonoBehaviour
             return;
         }
 
+        if (IsInDestructionSequence)
+        {
+            UpdateHUDElements();
+            return;
+        }
+
         // Check Pause toggle input (ESC / P on Keyboard, Start on Gamepad)
         if (WasPauseTogglePressed())
         {
@@ -220,6 +247,12 @@ public class GameManager : MonoBehaviour
 
         float dt = Time.deltaTime;
         survivalTime += dt;
+
+        // Station shield passive auto-recharge when not under attack for more than 5.5 seconds
+        if (stationCurrentHealth > 0f && stationCurrentHealth < stationMaxHealth && (Time.time - lastStationHitTime > 5.5f))
+        {
+            stationCurrentHealth = Mathf.Min(stationMaxHealth, stationCurrentHealth + stationShieldRechargeRate * dt);
+        }
 
         UpdateWaveLogic(dt);
         UpdateHUDElements();
@@ -414,11 +447,21 @@ public class GameManager : MonoBehaviour
     public void QuitMission()
     {
         Time.timeScale = 1f;
+        Time.fixedDeltaTime = 0.02f;
         IsPaused = false;
+        IsGameOver = false;
+        IsInDestructionSequence = false;
 
         if (SpaceshipController.Instance != null)
         {
             SpaceshipController.Instance.StopRumble();
+        }
+
+        // Load MainMenu scene if registered in Build Settings, otherwise exit play mode / application
+        if (Application.CanStreamedLevelBeLoaded("MainMenu"))
+        {
+            SceneManager.LoadScene("MainMenu");
+            return;
         }
 
 #if UNITY_EDITOR
@@ -429,7 +472,7 @@ public class GameManager : MonoBehaviour
     }
 
     // =========================================================================
-    // WAVE SPAWNING & COUNTDOWN LOGIC
+    // WAVE SPAWNING & COUNTDOWN LOGIC (2-MINUTE CONTINUOUS WAVE + MOP-UP PHASE)
     // =========================================================================
 
     private void UpdateWaveLogic(float dt)
@@ -455,14 +498,55 @@ public class GameManager : MonoBehaviour
         }
         else if (waveInProgress)
         {
-            if (enemiesToSpawnInCurrentWave <= 0 && EnemySpaceship.ActiveEnemies.Count == 0)
+            if (waveRemainingDuration > 0f)
+            {
+                waveRemainingDuration -= dt;
+
+                if (waveRemainingDuration > 0f)
+                {
+                    // Continuously spawn reinforcements during the 2-minute wave up to the concurrent cap
+                    int activeCount = EnemySpaceship.ActiveEnemies.Count;
+                    if (activeCount < currentWaveMaxActiveEnemies)
+                    {
+                        // Speed up reinforcement arrival if very few enemies remain on the field
+                        if (activeCount <= 1 && nextReinforcementSpawnTimer > 0.75f)
+                        {
+                            nextReinforcementSpawnTimer = 0.75f;
+                        }
+
+                        nextReinforcementSpawnTimer -= dt;
+                        if (nextReinforcementSpawnTimer <= 0f)
+                        {
+                            SpawnReinforcementEnemy();
+                            float interval = Mathf.Max(1.6f, 3.4f - (currentWave - 1) * 0.25f);
+                            nextReinforcementSpawnTimer = interval * Random.Range(0.85f, 1.15f);
+                        }
+                    }
+                }
+                else
+                {
+                    waveRemainingDuration = 0f;
+                    if (!waveTimeExpiredAlertShown && EnemySpaceship.ActiveEnemies.Count > 0)
+                    {
+                        waveTimeExpiredAlertShown = true;
+                        ShowWaveBanner(
+                            $"WAVE {currentWave} TIME EXPIRED!",
+                            $"ELIMINATE ALL {EnemySpaceship.ActiveEnemies.Count} REMAINING HOSTILES TO ADVANCE",
+                            3.5f
+                        );
+                    }
+                }
+            }
+
+            // Once the 2-minute wave timer is up AND all remaining enemies have been destroyed, advance to next wave countdown
+            if (waveRemainingDuration <= 0f && EnemySpaceship.ActiveEnemies.Count == 0)
             {
                 waveInProgress = false;
                 waitingForNextWave = true;
                 currentWaveTotalCountdown = Mathf.Max(1f, timeBetweenWaves);
                 nextWaveCountdown = currentWaveTotalCountdown;
 
-                // Repair bonus for surviving the wave
+                // Moderate shield & hull repair bonus between waves
                 stationCurrentHealth = Mathf.Min(stationMaxHealth, stationCurrentHealth + stationMaxHealth * 0.15f);
                 if (SpaceshipController.Instance != null)
                 {
@@ -478,46 +562,76 @@ public class GameManager : MonoBehaviour
     private void StartNextWave()
     {
         currentWave++;
-        int count = Mathf.Min(maxConcurrentEnemies, baseEnemiesPerWave + (currentWave - 1) * extraEnemiesPerWave);
-        enemiesToSpawnInCurrentWave = count;
+
+        // Scale concurrent active enemy cap each wave (Wave 1 = 2, Wave 2 = 3, Wave 3 = 4... up to 12)
+        currentWaveMaxActiveEnemies = Mathf.Min(
+            maxConcurrentEnemies,
+            baseEnemiesPerWave + (currentWave - 1) * extraEnemiesPerWave
+        );
+
+        waveRemainingDuration = Mathf.Max(10f, waveDuration);
+        waveTotalSpawnedCount = 0;
+        waveTimeExpiredAlertShown = false;
+        nextReinforcementSpawnTimer = 3.5f;
         waveInProgress = true;
 
+        int initialSquadSize = Mathf.Min(currentWaveMaxActiveEnemies, 2 + ((currentWave - 1) / 2));
+
         ShowWaveBanner(
-            $"WARNING — WAVE {currentWave} JUMPING IN!",
-            $"{count} HOSTILE INTERCEPTORS EMERGING FROM JUMPSPACE",
+            $"WARNING — WAVE {currentWave} ASSAULT BEGINS! (02:00)",
+            $"CONTINUOUS JUMPSPACE INCURSION  —  MAX ACTIVE HOSTILES: {currentWaveMaxActiveEnemies}",
             3.8f
         );
-        StartCoroutine(SpawnWaveCoroutine(currentWave, count));
+        StartCoroutine(SpawnWaveCoroutine(currentWave, initialSquadSize));
     }
 
-    private IEnumerator SpawnWaveCoroutine(int waveNum, int count)
+    private IEnumerator SpawnWaveCoroutine(int waveNum, int initialCount)
     {
         EnsureEnemyPrefabLoaded();
 
         float baseAngle = Random.Range(0f, 360f);
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < initialCount; i++)
         {
-            if (IsGameOver) yield break;
+            if (IsGameOver || IsInDestructionSequence || !waveInProgress || waveRemainingDuration <= 0f)
+                yield break;
 
-            float angleDeg = baseAngle + (360f / Mathf.Max(1, count)) * i + Random.Range(-18f, 18f);
-            float angleRad = angleDeg * Mathf.Deg2Rad;
-            float distance = Random.Range(115f, 155f);
-            float height = Random.Range(12f, 42f);
+            if (EnemySpaceship.ActiveEnemies.Count >= currentWaveMaxActiveEnemies)
+                yield break;
 
-            Vector3 exitPos = stationCenterPosition + new Vector3(
-                Mathf.Cos(angleRad) * distance,
-                height,
-                Mathf.Sin(angleRad) * distance
-            );
+            float angleDeg = baseAngle + (360f / Mathf.Max(1, initialCount)) * i + Random.Range(-18f, 18f);
+            SpawnEnemyAtAngle(angleDeg, waveNum);
 
-            Vector3 toStation = (stationCenterPosition - exitPos).normalized;
-            Quaternion exitRot = Quaternion.LookRotation(toStation, Vector3.up);
-
-            SpawnSingleEnemyFromJumpspace(exitPos, exitRot, waveNum, i);
-            enemiesToSpawnInCurrentWave = Mathf.Max(0, enemiesToSpawnInCurrentWave - 1);
-
-            yield return new WaitForSeconds(0.45f);
+            yield return new WaitForSeconds(0.40f);
         }
+    }
+
+    private void SpawnReinforcementEnemy()
+    {
+        if (IsGameOver || IsInDestructionSequence || !waveInProgress || waveRemainingDuration <= 0f) return;
+        if (EnemySpaceship.ActiveEnemies.Count >= currentWaveMaxActiveEnemies) return;
+
+        EnsureEnemyPrefabLoaded();
+        float randomAngleDeg = Random.Range(0f, 360f);
+        SpawnEnemyAtAngle(randomAngleDeg, currentWave);
+    }
+
+    private void SpawnEnemyAtAngle(float angleDeg, int waveNum)
+    {
+        float angleRad = angleDeg * Mathf.Deg2Rad;
+        float distance = Random.Range(115f, 155f);
+        float height = Random.Range(12f, 42f);
+
+        Vector3 exitPos = stationCenterPosition + new Vector3(
+            Mathf.Cos(angleRad) * distance,
+            height,
+            Mathf.Sin(angleRad) * distance
+        );
+
+        Vector3 toStation = (stationCenterPosition - exitPos).normalized;
+        Quaternion exitRot = Quaternion.LookRotation(toStation, Vector3.up);
+
+        SpawnSingleEnemyFromJumpspace(exitPos, exitRot, waveNum, waveTotalSpawnedCount);
+        waveTotalSpawnedCount++;
     }
 
     private void SpawnSingleEnemyFromJumpspace(Vector3 exitPos, Quaternion exitRot, int waveNum, int unitIdx)
@@ -552,18 +666,133 @@ public class GameManager : MonoBehaviour
 
     public void DamageStation(float amount)
     {
-        if (IsGameOver) return;
+        if (IsGameOver || IsInDestructionSequence) return;
 
         lastStationHitTime = Time.time;
         stationCurrentHealth = Mathf.Max(0f, stationCurrentHealth - amount);
 
         if (stationCurrentHealth <= 0f)
         {
-            SpaceshipExplosion.Spawn(stationCenterPosition, 2.2f);
-            SpaceshipExplosion.Spawn(stationCenterPosition + new Vector3(14f, 4f, -10f), 1.6f);
-            SpaceshipExplosion.Spawn(stationCenterPosition + new Vector3(-16f, 6f, 12f), 1.6f);
-            TriggerGameOver("SPACE STATION DESTROYED BY ENEMY FLEET");
+            StartCoroutine(StationDestructionSequenceCoroutine());
         }
+    }
+
+    /// <summary>
+    /// Triggers slow-motion camera focus and multi-stage explosions when the Player Spaceship is destroyed,
+    /// before showing the Game Over menu.
+    /// </summary>
+    public void TriggerPlayerShipDestruction(Vector3 shipPosition)
+    {
+        if (IsGameOver || IsInDestructionSequence) return;
+        StartCoroutine(PlayerShipDestructionSequenceCoroutine(shipPosition));
+    }
+
+    private IEnumerator StationDestructionSequenceCoroutine()
+    {
+        IsInDestructionSequence = true;
+        IsPaused = false;
+        if (pauseMenuPanel != null) pauseMenuPanel.SetActive(false);
+
+        // Slow-motion cinematic effect
+        Time.timeScale = 0.25f;
+        Time.fixedDeltaTime = 0.02f * Time.timeScale;
+
+        // Focus camera onto the exploding Space Station
+        ThirdPersonCamera tpCam = (Camera.main != null) ? Camera.main.GetComponent<ThirdPersonCamera>() : FindFirstObjectByType<ThirdPersonCamera>();
+        if (tpCam != null)
+        {
+            tpCam.StartDestructionCinematic(stationCenterPosition, 52f);
+        }
+
+        ShowWaveBanner(
+            "CRITICAL FAILURE — SPACE STATION DESTROYED!",
+            "CORE REACTOR BREACH DETECTED",
+            10f
+        );
+
+        Vector3[] blastOffsets = new Vector3[]
+        {
+            Vector3.zero,
+            new Vector3(14f, 5f, -10f),
+            new Vector3(-16f, 7f, 12f),
+            new Vector3(8f, -3f, 15f),
+            new Vector3(-12f, 4f, -14f),
+            new Vector3(0f, 10f, 0f)
+        };
+        float[] blastScales = new float[] { 2.4f, 1.7f, 1.8f, 1.6f, 1.9f, 2.8f };
+
+        for (int i = 0; i < blastOffsets.Length; i++)
+        {
+            SpaceshipExplosion.Spawn(stationCenterPosition + blastOffsets[i], blastScales[i]);
+            SpaceshipController.TriggerGamepadRumble(0.95f, 1.0f, 0.55f);
+            yield return new WaitForSecondsRealtime(0.48f);
+        }
+
+        yield return new WaitForSecondsRealtime(0.65f);
+
+        if (tpCam != null)
+        {
+            tpCam.StopDestructionCinematic();
+        }
+
+        Time.timeScale = 1f;
+        Time.fixedDeltaTime = 0.02f;
+        IsInDestructionSequence = false;
+
+        TriggerGameOver("SPACE STATION DESTROYED BY ENEMY FLEET");
+    }
+
+    private IEnumerator PlayerShipDestructionSequenceCoroutine(Vector3 shipPos)
+    {
+        IsInDestructionSequence = true;
+        IsPaused = false;
+        if (pauseMenuPanel != null) pauseMenuPanel.SetActive(false);
+
+        // Slow-motion cinematic effect
+        Time.timeScale = 0.25f;
+        Time.fixedDeltaTime = 0.02f * Time.timeScale;
+
+        // Focus camera directly onto the exploding Player Spaceship
+        ThirdPersonCamera tpCam = (Camera.main != null) ? Camera.main.GetComponent<ThirdPersonCamera>() : FindFirstObjectByType<ThirdPersonCamera>();
+        if (tpCam != null)
+        {
+            tpCam.StartDestructionCinematic(shipPos, 20f);
+        }
+
+        ShowWaveBanner(
+            "CRITICAL HULL BREACH — INTERCEPTOR DESTROYED!",
+            "EJECTION SYSTEM OFFLINE",
+            10f
+        );
+
+        Vector3[] shipBlastOffsets = new Vector3[]
+        {
+            Vector3.zero,
+            new Vector3(2.2f, 0.6f, -1.8f),
+            new Vector3(-2.4f, -0.4f, 1.5f),
+            new Vector3(0f, 0.5f, 0f)
+        };
+        float[] shipBlastScales = new float[] { 1.45f, 1.15f, 1.25f, 1.85f };
+
+        for (int i = 0; i < shipBlastOffsets.Length; i++)
+        {
+            SpaceshipExplosion.Spawn(shipPos + shipBlastOffsets[i], shipBlastScales[i]);
+            SpaceshipController.TriggerGamepadRumble(1.0f, 1.0f, 0.55f);
+            yield return new WaitForSecondsRealtime(0.55f);
+        }
+
+        yield return new WaitForSecondsRealtime(0.65f);
+
+        if (tpCam != null)
+        {
+            tpCam.StopDestructionCinematic();
+        }
+
+        Time.timeScale = 1f;
+        Time.fixedDeltaTime = 0.02f;
+        IsInDestructionSequence = false;
+
+        TriggerGameOver("PLAYER SPACESHIP DESTROYED IN COMBAT");
     }
 
     public void OnEnemyDestroyed(EnemySpaceship destroyedEnemy)
@@ -583,7 +812,9 @@ public class GameManager : MonoBehaviour
 
         IsGameOver = true;
         IsPaused = false;
+        IsInDestructionSequence = false;
         Time.timeScale = 1f;
+        Time.fixedDeltaTime = 0.02f;
         gameOverReason = reason;
 
         if (SpaceshipController.Instance != null)
@@ -617,7 +848,7 @@ public class GameManager : MonoBehaviour
         EnsureHUDElements();
         activeWaveAlertHeader = title;
         activeWaveAlertSub = subtitle;
-        waveBannerHideTime = Time.time + duration;
+        waveBannerHideTime = Time.unscaledTime + duration;
 
         if (waveBannerPanel != null)
         {
@@ -1895,7 +2126,7 @@ public class GameManager : MonoBehaviour
                     waveBannerProgressFill.color = clampedTimer <= 3.0f ? ModernCrimsonAccent : ModernGoldAccent;
                 }
             }
-            else if (Time.time < waveBannerHideTime)
+            else if (Time.unscaledTime < waveBannerHideTime)
             {
                 if (!waveBannerPanel.activeSelf)
                 {
@@ -1918,6 +2149,59 @@ public class GameManager : MonoBehaviour
                 {
                     waveBannerProgressFill.fillAmount = 1f;
                     waveBannerProgressFill.color = ModernCrimsonAccent;
+                }
+            }
+            else if (waveInProgress)
+            {
+                if (!waveBannerPanel.activeSelf)
+                {
+                    waveBannerPanel.SetActive(true);
+                }
+
+                int activeHostiles = EnemySpaceship.ActiveEnemies.Count;
+
+                if (waveRemainingDuration > 0f)
+                {
+                    int mins = Mathf.FloorToInt(waveRemainingDuration / 60f);
+                    int secs = Mathf.FloorToInt(waveRemainingDuration % 60f);
+
+                    if (waveBannerTitleText != null)
+                    {
+                        waveBannerTitleText.text = $"WAVE {currentWave} ASSAULT  —  ACTIVE HOSTILES: {activeHostiles} / {currentWaveMaxActiveEnemies}";
+                        waveBannerTitleText.color = ModernGoldAccent;
+                    }
+
+                    if (waveBannerTimerText != null)
+                    {
+                        waveBannerTimerText.text = $"WAVE TIME REMAINING:   {mins:00}:{secs:00}";
+                        waveBannerTimerText.color = Color.white;
+                    }
+
+                    if (waveBannerProgressFill != null)
+                    {
+                        waveBannerProgressFill.fillAmount = Mathf.Clamp01(waveRemainingDuration / Mathf.Max(1f, waveDuration));
+                        waveBannerProgressFill.color = ModernGoldAccent;
+                    }
+                }
+                else
+                {
+                    if (waveBannerTitleText != null)
+                    {
+                        waveBannerTitleText.text = $"WAVE {currentWave} TIME EXPIRED — CLEAR REMAINING HOSTILES!";
+                        waveBannerTitleText.color = ModernCrimsonAccent;
+                    }
+
+                    if (waveBannerTimerText != null)
+                    {
+                        waveBannerTimerText.text = $"HOSTILES REMAINING TO ADVANCE:   {activeHostiles}";
+                        waveBannerTimerText.color = Color.Lerp(Color.white, ModernCrimsonAccent, 0.5f + 0.5f * Mathf.Sin(Time.time * 10f));
+                    }
+
+                    if (waveBannerProgressFill != null)
+                    {
+                        waveBannerProgressFill.fillAmount = Mathf.Clamp01(activeHostiles / (float)Mathf.Max(1, currentWaveMaxActiveEnemies));
+                        waveBannerProgressFill.color = ModernCrimsonAccent;
+                    }
                 }
             }
             else

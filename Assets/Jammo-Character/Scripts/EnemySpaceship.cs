@@ -22,19 +22,19 @@ public class EnemySpaceship : MonoBehaviour
 
     [Header("Enemy Identity & Health")]
     public string enemyCallsign = "RAIDER-17";
-    public float maxHealth = 100f;
-    public float currentHealth = 100f;
+    public float maxHealth = 135f;
+    public float currentHealth = 135f;
 
     [Header("Combat & Flight Settings")]
-    public float cruiseSpeed = 34f;
-    public float attackRunSpeed = 42f;
-    public float turnResponsiveness = 3.2f;
+    public float cruiseSpeed = 38f;
+    public float attackRunSpeed = 48f;
+    public float turnResponsiveness = 3.8f;
     public float maxBankAngle = 46f;
-    public float bankSmoothSpeed = 5.5f;
-    public float fireRate = 2.4f;
-    public float laserSpeed = 195f;
-    public float laserDamage = 10f;
-    public float attackRange = 135f;
+    public float bankSmoothSpeed = 5.8f;
+    public float fireRate = 2.8f;
+    public float laserSpeed = 235f;
+    public float laserDamage = 14f;
+    public float attackRange = 165f;
 
     [Header("Ship Lighting Rig (Same as Player & Ally NPC)")]
     public bool enableShipLighting = true;
@@ -80,6 +80,8 @@ public class EnemySpaceship : MonoBehaviour
 
     private static Material sharedRedLineMat;
     private static Material sharedWarpPortalMat;
+    private static Material sharedThrusterFlameMat;
+    private int aiFrameOffset;
 
     private static readonly Vector3[] EnemyMuzzleOffsets = new Vector3[]
     {
@@ -111,12 +113,20 @@ public class EnemySpaceship : MonoBehaviour
 
     /// <summary>
     /// Initializes the enemy ship and triggers its Jumpspace / Hyperspace arrival sequence.
+    /// Scales enemy durability, fire rate, and damage progressively with each wave.
     /// </summary>
     public void InitializeWithJumpspace(Vector3 exitPosition, Quaternion exitRotation, int waveNumber, int unitIndex)
     {
+        aiFrameOffset = unitIndex;
         enemyCallsign = $"INTERCEPTOR W{waveNumber}-{unitIndex + 1:00}";
-        maxHealth = 90f + (waveNumber - 1) * 15f;
+
+        int waveTier = Mathf.Max(0, waveNumber - 1);
+        maxHealth = 135f + waveTier * 22f;
         currentHealth = maxHealth;
+        laserDamage = 14f + Mathf.Min(16f, waveTier * 2.5f);
+        fireRate = 2.8f + Mathf.Min(1.6f, waveTier * 0.22f);
+        attackRunSpeed = 48f + Mathf.Min(12f, waveTier * 1.5f);
+        cruiseSpeed = 38f + Mathf.Min(10f, waveTier * 1.2f);
 
         EnsureShipLightingRig();
         EnsureRedEnemyLightLines();
@@ -164,7 +174,7 @@ public class EnemySpaceship : MonoBehaviour
     private void Update()
     {
         if (!Application.isPlaying) return;
-        if (GameManager.Instance != null && GameManager.Instance.IsGameOver) return;
+        if (GameManager.Instance != null && (GameManager.Instance.IsGameOver || GameManager.Instance.IsInDestructionSequence)) return;
 
         float dt = Time.deltaTime;
 
@@ -319,14 +329,17 @@ public class EnemySpaceship : MonoBehaviour
 
         Vector3 desiredDir = isEvading ? evadeDirection : (distToTarget > 0.01f ? toTarget / distToTarget : transform.forward);
 
-        // Obstacle avoidance using SphereCast
-        if (Physics.SphereCast(transform.position, 2.5f, transform.forward, out RaycastHit hit, 24f, ~0, QueryTriggerInteraction.Ignore))
+        // Throttled obstacle avoidance using Raycast every 3rd frame for smooth FPS
+        if (((Time.frameCount + aiFrameOffset) % 3) == 0)
         {
-            if (!hit.collider.transform.IsChildOf(transform))
+            if (Physics.Raycast(transform.position, transform.forward, out RaycastHit hit, 24f, ~0, QueryTriggerInteraction.Ignore))
             {
-                Vector3 avoidDir = Vector3.ProjectOnPlane(transform.forward, hit.normal).normalized;
-                if (avoidDir.sqrMagnitude < 0.01f) avoidDir = Vector3.up;
-                desiredDir = Vector3.Slerp(desiredDir, (avoidDir + hit.normal * 0.7f + Vector3.up * 0.3f).normalized, 0.85f).normalized;
+                if (!hit.collider.transform.IsChildOf(transform))
+                {
+                    Vector3 avoidDir = Vector3.ProjectOnPlane(transform.forward, hit.normal).normalized;
+                    if (avoidDir.sqrMagnitude < 0.01f) avoidDir = Vector3.up;
+                    desiredDir = Vector3.Slerp(desiredDir, (avoidDir + hit.normal * 0.7f + Vector3.up * 0.3f).normalized, 0.85f).normalized;
+                }
             }
         }
 
@@ -357,12 +370,12 @@ public class EnemySpaceship : MonoBehaviour
         transform.position += transform.forward * (currentSpeed * dt);
 
         // Weapon firing logic when aligned toward target
-        if (!isEvading && distToTarget <= attackRange && distToTarget >= minSafeDist * 0.75f)
+        if (!isEvading && distToTarget <= attackRange && distToTarget >= minSafeDist * 0.65f)
         {
             float aimDot = Vector3.Dot(transform.forward, toTarget.normalized);
-            if (aimDot > 0.82f && Time.time >= nextFireTime)
+            if (aimDot > 0.72f && Time.time >= nextFireTime)
             {
-                nextFireTime = Time.time + (1f / Mathf.Max(0.5f, fireRate)) * Random.Range(0.85f, 1.2f);
+                nextFireTime = Time.time + (1f / Mathf.Max(0.5f, fireRate)) * Random.Range(0.80f, 1.15f);
                 FireEnemyLaser(targetPos);
             }
         }
@@ -370,8 +383,8 @@ public class EnemySpaceship : MonoBehaviour
 
     private void EvaluateTacticalTarget()
     {
-        // Primary objective (60% priority): Attack the Space Station
-        // Secondary objective (40% priority): Attack nearby Player or Ally NPCs
+        // Primary objective (55% priority): Attack the Space Station
+        // Secondary objective (45% priority): Aggressively engage Player or Ally NPCs
         SpaceshipController playerShip = SpaceshipController.Instance;
         float distToPlayer = float.MaxValue;
         if (playerShip != null)
@@ -385,11 +398,11 @@ public class EnemySpaceship : MonoBehaviour
         SpaceshipNPC nearestAlly = SpaceshipNPC.FindNearestAlly(transform.position, out float distToAlly);
 
         float roll = Random.value;
-        if (distToPlayer < 85f && roll < 0.38f)
+        if (distToPlayer < 120f && roll < 0.42f)
         {
             currentTargetType = TargetType.Player;
         }
-        else if (nearestAlly != null && distToAlly < 90f && roll < 0.65f)
+        else if (nearestAlly != null && distToAlly < 95f && roll < 0.60f)
         {
             currentTargetType = TargetType.AllyNPC;
             targetAlly = nearestAlly;
@@ -407,7 +420,7 @@ public class EnemySpaceship : MonoBehaviour
             SpaceshipController player = SpaceshipController.Instance;
             if (player.isPiloting)
             {
-                return player.transform.position + player.CurrentVelocity * 0.25f;
+                return player.transform.position + player.CurrentVelocity * 0.28f;
             }
             if (player.characterPlayer != null)
             {
@@ -434,8 +447,8 @@ public class EnemySpaceship : MonoBehaviour
 
         Vector3 muzzlePos = transform.TransformPoint(offset);
         Vector3 aimDir = (targetPosition - muzzlePos).normalized;
-        // Blend between ship forward and exact target direction for fair accuracy
-        Vector3 fireDir = Vector3.Slerp(transform.forward, aimDir, 0.65f).normalized;
+        // Blend between ship forward and exact target direction for sharper accuracy
+        Vector3 fireDir = Vector3.Slerp(transform.forward, aimDir, 0.80f).normalized;
         Quaternion boltRot = Quaternion.LookRotation(fireDir, Vector3.up);
 
         bool targetingStation = (currentTargetType == TargetType.Station);
@@ -449,6 +462,11 @@ public class EnemySpaceship : MonoBehaviour
             laserDamage,
             targetingStation
         );
+
+        if (AudioManager.Instance != null)
+        {
+            AudioManager.Instance.PlayBlasterShot(false, muzzlePos);
+        }
 
         muzzleFlashIntensity = 22f;
         if (muzzleFlashLight != null)
@@ -551,40 +569,18 @@ public class EnemySpaceship : MonoBehaviour
             lightingRigRoot = rigObj.transform;
         }
 
-        // 1. Top Key Light (Identical to Player & NPC)
+        // 1. Top Key Light (Illuminates hull & wings clearly without exceeding URP per-camera light limits)
         topKeyLight = GetOrCreateLight(
             "Hull_TopKeyLight",
             LightType.Point,
-            new Vector3(0f, 5.5f, 0.5f),
+            new Vector3(0f, 5.2f, 0.5f),
             Quaternion.identity,
             new Color(0.92f, 0.96f, 1.0f),
-            hullKeyLightIntensity,
-            28f
+            hullKeyLightIntensity * 1.15f,
+            26f
         );
 
-        // 2. Front Nose Fill Light (Identical to Player & NPC)
-        frontRimLight = GetOrCreateLight(
-            "Hull_FrontFillLight",
-            LightType.Point,
-            new Vector3(0f, 2.2f, 5.5f),
-            Quaternion.identity,
-            new Color(0.75f, 0.88f, 1.0f),
-            hullRimLightIntensity * 1.1f,
-            22f
-        );
-
-        // 3. Bottom Rim Light (Identical to Player & NPC)
-        bottomRimLight = GetOrCreateLight(
-            "Hull_BottomRimLight",
-            LightType.Point,
-            new Vector3(0f, -3.8f, -0.5f),
-            Quaternion.identity,
-            new Color(0.25f, 0.7f, 1.0f),
-            hullRimLightIntensity,
-            24f
-        );
-
-        // 4. Thruster Engine Glow Light
+        // 2. Thruster Engine Glow Light
         thrusterLight = GetOrCreateLight(
             "Thruster_EngineGlow",
             LightType.Point,
@@ -592,41 +588,7 @@ public class EnemySpaceship : MonoBehaviour
             Quaternion.identity,
             new Color(0.15f, 0.75f, 1.0f),
             thrusterBaseIntensity,
-            18f
-        );
-
-        // 5. Dual Forward Headlights
-        leftHeadlight = GetOrCreateLight(
-            "Headlight_Left",
-            LightType.Spot,
-            new Vector3(-1.6f, -0.2f, 3.8f),
-            Quaternion.Euler(4f, 0f, 0f),
-            new Color(0.85f, 0.95f, 1.0f),
-            20f,
-            65f,
-            55f
-        );
-
-        rightHeadlight = GetOrCreateLight(
-            "Headlight_Right",
-            LightType.Spot,
-            new Vector3(1.6f, -0.2f, 3.8f),
-            Quaternion.Euler(4f, 0f, 0f),
-            new Color(0.85f, 0.95f, 1.0f),
-            20f,
-            65f,
-            55f
-        );
-
-        // 6. Weapon Muzzle Flash Light
-        muzzleFlashLight = GetOrCreateLight(
-            "Weapon_MuzzleFlashLight",
-            LightType.Point,
-            new Vector3(0f, -0.5f, 3.5f),
-            Quaternion.identity,
-            new Color(1.0f, 0.15f, 0.2f),
-            0f,
-            20f
+            16f
         );
 
         EnsureThrusterFlames();
@@ -695,17 +657,6 @@ public class EnemySpaceship : MonoBehaviour
         // 4. Dual Thin Red Wingtip Light Trails (leaves thin red light ribbons in space during maneuvers)
         CreateThinRedWingtipTrail(redLinesRoot, "RedWingtipTrail_Left", new Vector3(-4.25f, -0.15f, -1.3f));
         CreateThinRedWingtipTrail(redLinesRoot, "RedWingtipTrail_Right", new Vector3(4.25f, -0.15f, -1.3f));
-
-        // 5. Subtle Red Identification Accent Light
-        GameObject redAccentObj = new GameObject("Enemy_RedAccentLight");
-        redAccentObj.transform.SetParent(redLinesRoot, false);
-        redAccentObj.transform.localPosition = new Vector3(0f, 1.4f, 0f);
-        Light redAccent = redAccentObj.AddComponent<Light>();
-        redAccent.type = LightType.Point;
-        redAccent.color = new Color(1.0f, 0.08f, 0.12f);
-        redAccent.intensity = 7.5f;
-        redAccent.range = 16f;
-        redAccent.shadows = LightShadows.None;
     }
 
     private void CreateThinRedLineRenderer(Transform parent, string name, Vector3[] localPoints, float width)
@@ -754,24 +705,39 @@ public class EnemySpaceship : MonoBehaviour
 
     private static void EnsureSharedMaterials()
     {
-        if (sharedRedLineMat != null && sharedWarpPortalMat != null) return;
+        if (sharedRedLineMat != null && sharedWarpPortalMat != null && sharedThrusterFlameMat != null) return;
 
         Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit");
         if (unlitShader == null) unlitShader = Shader.Find("Unlit/Color");
 
         if (unlitShader != null)
         {
-            sharedRedLineMat = new Material(unlitShader);
-            Color crimson = new Color(1.0f, 0.10f, 0.14f, 1f);
-            sharedRedLineMat.color = crimson;
-            if (sharedRedLineMat.HasProperty("_BaseColor"))
-                sharedRedLineMat.SetColor("_BaseColor", crimson);
+            if (sharedRedLineMat == null)
+            {
+                sharedRedLineMat = new Material(unlitShader);
+                Color crimson = new Color(1.0f, 0.10f, 0.14f, 1f);
+                sharedRedLineMat.color = crimson;
+                if (sharedRedLineMat.HasProperty("_BaseColor"))
+                    sharedRedLineMat.SetColor("_BaseColor", crimson);
+            }
 
-            sharedWarpPortalMat = new Material(unlitShader);
-            Color warpColor = new Color(0.45f, 0.85f, 1.0f, 1f);
-            sharedWarpPortalMat.color = warpColor;
-            if (sharedWarpPortalMat.HasProperty("_BaseColor"))
-                sharedWarpPortalMat.SetColor("_BaseColor", warpColor);
+            if (sharedWarpPortalMat == null)
+            {
+                sharedWarpPortalMat = new Material(unlitShader);
+                Color warpColor = new Color(0.45f, 0.85f, 1.0f, 1f);
+                sharedWarpPortalMat.color = warpColor;
+                if (sharedWarpPortalMat.HasProperty("_BaseColor"))
+                    sharedWarpPortalMat.SetColor("_BaseColor", warpColor);
+            }
+
+            if (sharedThrusterFlameMat == null)
+            {
+                sharedThrusterFlameMat = new Material(unlitShader);
+                Color flameColor = new Color(0.25f, 0.9f, 1.0f, 1f);
+                sharedThrusterFlameMat.color = flameColor;
+                if (sharedThrusterFlameMat.HasProperty("_BaseColor"))
+                    sharedThrusterFlameMat.SetColor("_BaseColor", flameColor);
+            }
         }
     }
 
@@ -810,6 +776,8 @@ public class EnemySpaceship : MonoBehaviour
 
     private void EnsureThrusterFlames()
     {
+        EnsureSharedMaterials();
+
         Vector3[] nozzlePositions = new Vector3[]
         {
             new Vector3(0f, -0.22f, -4.55f),
@@ -839,15 +807,9 @@ public class EnemySpaceship : MonoBehaviour
                 Renderer rend = sphere.GetComponent<Renderer>();
                 if (rend != null)
                 {
-                    Shader unlitShader = Shader.Find("Universal Render Pipeline/Unlit");
-                    if (unlitShader == null) unlitShader = Shader.Find("Unlit/Color");
-                    if (unlitShader != null)
+                    if (sharedThrusterFlameMat != null)
                     {
-                        Material flameMat = new Material(unlitShader);
-                        flameMat.color = new Color(0.2f, 0.85f, 1.0f, 1.0f);
-                        if (flameMat.HasProperty("_BaseColor"))
-                            flameMat.SetColor("_BaseColor", new Color(0.25f, 0.9f, 1.0f, 1f));
-                        rend.sharedMaterial = flameMat;
+                        rend.sharedMaterial = sharedThrusterFlameMat;
                     }
                     rend.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                     rend.receiveShadows = false;

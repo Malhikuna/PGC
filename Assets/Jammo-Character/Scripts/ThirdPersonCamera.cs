@@ -274,6 +274,37 @@ public class ThirdPersonCamera : MonoBehaviour
     }
 
     private float explosionShakeIntensity;
+    private bool isDestructionCinematicActive = false;
+    private Vector3 destructionFocusPos;
+    private float destructionOrbitDist = 35f;
+    private float destructionOrbitYaw = 0f;
+    private float destructionOrbitPitch = 18f;
+
+    /// <summary>
+    /// Focuses and slowly orbits the camera around the exploding Space Station or Player Spaceship during slow-motion destruction.
+    /// </summary>
+    public void StartDestructionCinematic(Vector3 focusWorldPos, float viewingDistance = 36f)
+    {
+        isDestructionCinematicActive = true;
+        destructionFocusPos = focusWorldPos;
+        destructionOrbitDist = viewingDistance;
+
+        Vector3 fromFocus = transform.position - focusWorldPos;
+        if (fromFocus.sqrMagnitude > 1f)
+        {
+            destructionOrbitYaw = Mathf.Atan2(fromFocus.x, fromFocus.z) * Mathf.Rad2Deg;
+        }
+        else
+        {
+            destructionOrbitYaw = currentYaw;
+        }
+        destructionOrbitPitch = 20f;
+    }
+
+    public void StopDestructionCinematic()
+    {
+        isDestructionCinematicActive = false;
+    }
 
     /// <summary>
     /// Triggers a camera shake impulse when a spaceship explodes nearby.
@@ -285,6 +316,33 @@ public class ThirdPersonCamera : MonoBehaviour
 
     private void LateUpdate()
     {
+        if (isDestructionCinematicActive)
+        {
+            float unscaledDt = Time.unscaledDeltaTime;
+            destructionOrbitYaw += 24f * unscaledDt;
+
+            Quaternion cineOrbitRot = Quaternion.Euler(destructionOrbitPitch, destructionOrbitYaw, 0f);
+            Vector3 desiredCamPos = destructionFocusPos + (cineOrbitRot * Vector3.forward) * destructionOrbitDist;
+            Quaternion desiredCamRot = Quaternion.LookRotation((destructionFocusPos - desiredCamPos).normalized, Vector3.up);
+
+            float smoothFactor = 1f - Mathf.Exp(-6.5f * unscaledDt);
+            transform.position = Vector3.Lerp(transform.position, desiredCamPos, smoothFactor);
+            transform.rotation = Quaternion.Slerp(transform.rotation, desiredCamRot, smoothFactor);
+
+            if (cam != null)
+            {
+                cam.fieldOfView = Mathf.Lerp(cam.fieldOfView, baseFOV + 6f, smoothFactor);
+            }
+
+            if (explosionShakeIntensity > 0.005f)
+            {
+                Vector3 shakeOffset = Random.insideUnitSphere * (explosionShakeIntensity * 0.42f);
+                transform.position += shakeOffset;
+                explosionShakeIntensity = Mathf.MoveTowards(explosionShakeIntensity, 0f, 2.4f * unscaledDt);
+            }
+            return;
+        }
+
         if (target == null) return;
         if (GameManager.Instance != null && (GameManager.Instance.IsPaused || GameManager.Instance.IsGameOver))
         {
@@ -309,7 +367,7 @@ public class ThirdPersonCamera : MonoBehaviour
         {
             Vector3 shakeOffset = Random.insideUnitSphere * (explosionShakeIntensity * 0.35f);
             transform.position += shakeOffset;
-            explosionShakeIntensity = Mathf.MoveTowards(explosionShakeIntensity, 0f, 3.2f * Time.deltaTime);
+            explosionShakeIntensity = Mathf.MoveTowards(explosionShakeIntensity, 0f, 3.2f * Time.unscaledDeltaTime);
         }
     }
 
